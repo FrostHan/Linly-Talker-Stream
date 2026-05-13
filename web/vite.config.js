@@ -59,6 +59,12 @@ export default defineConfig({
   server: {
     host: webHost,
     port: webPort,
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Surrogate-Control': 'no-store'
+    },
     // 根据配置文件自动启用/禁用 HTTPS
     ...(useSSL && {
       https: {

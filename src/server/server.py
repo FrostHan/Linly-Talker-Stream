@@ -58,10 +58,72 @@ async def auth_required(request):
     })
 
 
+# 闲置会话清理参数（环境变量可调）
+# - SESSION_IDLE_TIMEOUT_SEC: 单个 session 多久无交互就回收，默认 300 (5 分钟)
+# - SESSION_CLEANUP_INTERVAL_SEC: 后台扫描周期，默认 30
+def _idle_timeout() -> float:
+    try:
+        return float(os.environ.get('SESSION_IDLE_TIMEOUT_SEC', '300'))
+    except ValueError:
+        return 300.0
+
+
+def _cleanup_interval() -> float:
+    try:
+        return float(os.environ.get('SESSION_CLEANUP_INTERVAL_SEC', '30'))
+    except ValueError:
+        return 30.0
+
+
+async def _close_session(sessionid: int, reason: str = 'idle'):
+    """主动关闭 session 对应的 pc + 清掉 state 中的引用。"""
+    pc = state.session_pcs.get(sessionid)
+    if pc is not None:
+        try:
+            await pc.close()
+        except Exception as e:
+            logger.warning('关闭 sessionid=%s pc 失败: %s', sessionid, e)
+        state.remove_peer_connection(pc)
+    state.remove_session(sessionid)
+    logger.info('已回收 sessionid=%s (reason=%s)', sessionid, reason)
+
+
+async def idle_cleanup_task(app):
+    """周期性扫描 idle session 并清理。绑定到 app 生命周期。"""
+    timeout = _idle_timeout()
+    interval = _cleanup_interval()
+    logger.info('🧹 idle cleanup 任务启动: timeout=%.0fs interval=%.0fs', timeout, interval)
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                idle = state.idle_sessions(timeout)
+                for sid in idle:
+                    logger.warning('sessionid=%s 闲置超过 %.0fs，主动回收', sid, timeout)
+                    await _close_session(sid, reason='idle')
+            except Exception:
+                logger.exception('idle cleanup 扫描异常')
+    except asyncio.CancelledError:
+        logger.info('🧹 idle cleanup 任务已取消')
+        raise
+
+
+async def on_startup(app):
+    """启动后台 idle cleanup 任务"""
+    app['idle_cleanup_task'] = asyncio.create_task(idle_cleanup_task(app))
+
+
 async def on_shutdown(app):
     """服务器关闭时的清理操作"""
+    task = app.get('idle_cleanup_task')
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
     coros = [pc.close() for pc in state.pcs]
-    await asyncio.gather(*coros)
+    await asyncio.gather(*coros, return_exceptions=True)
     state.pcs.clear()
 
 
@@ -73,12 +135,14 @@ def create_app():
         middlewares=[password_middleware],
     )
     app.on_shutdown.append(on_shutdown)
+    app.on_startup.append(on_startup)
     
     # 路由集中注册，避免分散难维护
     app.router.add_post("/offer", routes.offer)
     app.router.add_post("/human", routes.human)
     app.router.add_post("/humanaudio", routes.humanaudio)
     app.router.add_post("/asr", routes.asr)
+    app.router.add_post("/asr/", routes.asr)
     app.router.add_post("/set_audiotype", routes.set_audiotype)
     app.router.add_post("/record", routes.record)
     app.router.add_post("/interrupt_talk", routes.interrupt_talk)

@@ -32,8 +32,14 @@ def create_asr_engine(
     # 根据不同引擎传递参数
     if asr_type == "whisper":
         return engine_cls(config=config, model_size=model_size)
-    else:
-        return engine_cls(config=config, **kwargs)
+    if asr_type == "funasr":
+        return engine_cls(
+            config=config,
+            model_name=kwargs.get("model_name", "paraformer-zh"),
+            device=kwargs.get("device", "auto"),
+        )
+
+    return engine_cls(config=config)
 
 _asr_instance: Optional[BaseASR] = None
 

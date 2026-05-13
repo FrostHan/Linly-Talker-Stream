@@ -127,6 +127,7 @@ export default {
     voiceNoContent: 'No voice content recognized',
     voiceFailed: 'Voice recognition failed',
     voiceRequestFailed: 'Voice recognition request failed',
+    voiceFallbackFunASR: 'Browser speech recognition is unavailable; switched to server FunASR',
     voiceMessageFailed: 'Failed to send voice message, please try again',
     connectFirst: 'Please connect first',
     backendNotReady: 'Backend is not fully started, please wait...'

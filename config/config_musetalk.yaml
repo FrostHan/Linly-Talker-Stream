@@ -1,7 +1,7 @@
 # 开发环境配置
 app:
   listenport: 8010
-  max_session: 1
+  max_session: 4
 
   ssl: true
   ssl_cert: ssl_certs/localhost.crt
@@ -24,9 +24,9 @@ tts:
   type: edgetts  # 开发环境使用免费的 EdgeTTS
   ref_file: zh-TW-HsiaoChenNeural  # EdgeTTS 支持的语音示例，作为参考音色
   # 仅 EdgeTTS 生效；格式 "+N%" / "-N%"，pitch 用 "+NHz"
-  rate: "+20%"      # 语速：+20% 加快 20%，-10% 减慢 10%
+  rate: "+10%"      # 语速：+20% 加快 20%，-10% 减慢 10%
   volume: "+0%"    # 音量
-  pitch: "+5Hz"    # 音调
+  pitch: "+0Hz"    # 音调
 
   # type: gpt-sovits
   # tts_server: http://127.0.0.1:9880
@@ -35,8 +35,8 @@ tts:
 
 asr:
   mode: browser  # browser | server | auto
-  type: whisper  # whisper | funasr
-  model_size: base  # tiny | base | small | medium | large
+  type: funasr  # whisper | funasr （funasr=阿里 paraformer-zh，中文准确度高）
+  model_size: base  # whisper 才用，funasr 忽略
   language: zh  # zh | en | auto
   device: auto  # auto | cpu | cuda
 

@@ -13,6 +13,7 @@ async def human(request):
     try:
         params = await request.json()
         sessionid = params.get('sessionid', 0)
+        state.touch_session(sessionid)
         
         if params.get('interrupt'):
             state.avatar_streams[sessionid].flush_talk()
@@ -55,6 +56,7 @@ async def interrupt_talk(request):
     try:
         params = await request.json()
         sessionid = params.get('sessionid', 0)
+        state.touch_session(sessionid)
         state.avatar_streams[sessionid].flush_talk()
         
         return web.Response(
@@ -77,6 +79,7 @@ async def is_speaking(request):
     """查询是否正在说话"""
     params = await request.json()
     sessionid = params.get('sessionid', 0)
+    state.touch_session(sessionid)
     
     return web.Response(
         content_type="application/json",
@@ -91,6 +94,7 @@ async def clear_history(request):
     try:
         params = await request.json()
         sessionid = params.get('sessionid', 0)
+        state.touch_session(sessionid)
         
         clear_session_history(sessionid)
         

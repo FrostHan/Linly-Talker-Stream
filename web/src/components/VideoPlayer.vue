@@ -12,7 +12,7 @@
     
     <div class="card-body p-0">
       <div class="video-container">
-        <video id="video" autoplay playsinline></video>
+        <video id="video" autoplay playsinline muted></video>
         <div class="recording-indicator" :class="{ active: isRecording }">
           <div class="blink"></div>
           <span>录制中</span>

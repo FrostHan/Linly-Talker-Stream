@@ -210,7 +210,16 @@
             </div>
 
             <div class="video-wrapper">
-              <video id="video" autoplay playsinline webkit-playsinline></video>
+              <video id="video" autoplay playsinline webkit-playsinline muted></video>
+              <button
+                v-if="isConnected && isMuted"
+                class="unmute-btn"
+                @click="handleUnmute"
+                title="点击解除静音"
+              >
+                <i class="bi bi-volume-mute-fill"></i>
+                点击解除静音
+              </button>
               <div class="video-overlay" v-if="!isConnected">
                 <i class="bi bi-camera-video-off" v-if="backendReady"></i>
                 <i class="bi bi-hourglass-split spin" v-else style="font-size: 4rem;"></i>
@@ -288,7 +297,7 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import DebugPanel from './components/DebugPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
-import { useWebRTC } from './composables/useWebRTC'
+import { useWebRTC } from './composables/useWebRTC?v=wait-ice-20260513'
 import { useSpeechRecognition } from './composables/useSpeechRecognition'
 import { useI18n } from './composables/useI18n'
 import { setupRoomAuth } from './composables/useRoomAuth'
@@ -327,6 +336,7 @@ const renderMarkdown = (text) => {
 const sessionId = ref(0)
 const connectionStatus = ref('disconnected')
 const isRecording = ref(false)
+const isMuted = ref(true)   // 默认 muted=true 以允许移动端 autoplay；连接后用户点击「解除静音」造主动 unmute
 const activeMode = ref('chat')
 const chatInput = ref('')
 const ttsInput = ref('')
@@ -529,7 +539,8 @@ const updateTheme = (theme) => {
 // 检查后端是否就绪
 const checkBackendReady = async () => {
   try {
-    const response = await fetch('/health')
+    // cache: 'no-store' 防止浏览器/CDN 缓存早期的 ready:false 响应
+    const response = await fetch('/health', { cache: 'no-store' })
     if (response.ok) {
       const data = await response.json()
       if (data.ready) {
@@ -539,7 +550,7 @@ const checkBackendReady = async () => {
       }
     }
   } catch (error) {
-    console.log('⏳ 等待后端启动...')
+    console.log('⏳ 等待后端启动...', error?.message || error)
   }
   return false
 }
@@ -568,29 +579,51 @@ const handleStartConnection = async () => {
       sessionId.value = newSessionId
       showNotification(t('notifications.connectSuccess'), 'success')
     }
-    
-    const checkConnection = setInterval(() => {
-      const video = document.getElementById('video')
-      if (video && video.readyState >= 3 && video.videoWidth > 0) {
-        connectionStatus.value = 'connected'
-        clearInterval(checkConnection)
-        
-        // 自动录制
-        if (appSettings.value.autoRecord) {
-          setTimeout(() => {
-            handleStartRecord()
-          }, 1000)
+
+    // 以前要等 video.readyState>=3 + videoWidth>0 才算 connected，但远程视频解码要几秒，
+    // 期间 isConnected=false 聊天框是灰的，用户以为没连上就反复点「启动连接」。
+    // setRemoteDescription 成功就表示 WebRTC 握手 OK，立刻让聊天可用；
+    // 视频是否在渲染交给 video 元素事件另外上报。
+    connectionStatus.value = 'connected'
+
+    // 连接成功后尽早探测 Web Speech 是否真的可用；失败则后续语音直接走 /asr(FunASR)。
+    runSpeechRecognitionPreflight(true)
+
+    // 诊断：收到 RTP 包不代表能解码出帧。监听 video 的生命周期事件，打印出来便于远程调试。
+    const video = document.getElementById('video')
+    if (video) {
+      video.onloadedmetadata = () => {
+        console.log('🎥 video loadedmetadata: %dx%d', video.videoWidth, video.videoHeight)
+      }
+      video.onplaying = () => {
+        console.log('▶️ video playing: readyState=%d size=%dx%d', video.readyState, video.videoWidth, video.videoHeight)
+      }
+      video.onstalled = () => console.warn('⚠️ video stalled')
+      video.onsuspend = () => console.warn('⚠️ video suspend')
+      video.onwaiting = () => console.warn('⚠️ video waiting (缓冲不够)')
+    }
+
+    // 诊断：3 秒后看下 WebRTC inbound RTP 统计，看远端是否真的收到 video 包
+    setTimeout(async () => {
+      const v = document.getElementById('video')
+      console.log('📊 3s 合 video 状态: readyState=%d %dx%d paused=%s muted=%s',
+        v?.readyState, v?.videoWidth, v?.videoHeight, v?.paused, v?.muted)
+      try {
+        const pcRef = window.__pc || null
+        if (pcRef && typeof pcRef.getStats === 'function') {
+          const stats = await pcRef.getStats()
+          stats.forEach(s => {
+            if (s.type === 'inbound-rtp') {
+              console.log('📊 inbound-rtp[%s] packets=%d bytes=%d frames=%s decoded=%s framesPerSec=%s',
+                s.kind, s.packetsReceived, s.bytesReceived,
+                s.framesReceived, s.framesDecoded, s.framesPerSecond)
+            }
+          })
         }
-      }
-    }, 2000)
-    
-    setTimeout(() => {
-      if (connectionStatus.value === 'connecting') {
-        connectionStatus.value = 'disconnected'
-        showNotification(t('notifications.connectTimeout'), 'error')
-      }
-      clearInterval(checkConnection)
-    }, 60000)
+      } catch (e) { console.warn('getStats 失败', e) }
+      // 自动录制
+      if (appSettings.value.autoRecord) handleStartRecord()
+    }, 3000)
   } catch (error) {
     console.error('连接失败:', error)
     connectionStatus.value = 'disconnected'
@@ -601,7 +634,25 @@ const handleStartConnection = async () => {
 const handleStopConnection = () => {
   stopPlay()
   connectionStatus.value = 'disconnected'
+  isMuted.value = true   // 重置，下次连接又从 muted 开始
   showNotification(t('notifications.disconnected'), 'info')
+}
+
+const handleUnmute = () => {
+  const video = document.getElementById('video')
+  if (!video) return
+  video.muted = false
+  // 重新请求播放以带起声音
+  const p = video.play()
+  if (p && typeof p.then === 'function') {
+    p.then(() => { isMuted.value = false; console.log('🔊 已解除静音') })
+     .catch(err => {
+       console.warn('解除静音后播放失败，回退 muted:', err)
+       video.muted = true
+     })
+  } else {
+    isMuted.value = false
+  }
 }
 
 const handleStartRecord = async () => {
@@ -804,15 +855,29 @@ const sendTTSMessage = async () => {
 // 语音识别
 let mediaRecorder = null
 let audioChunks = []
+let recordedMimeType = ''           // MediaRecorder 实际使用的 mime（iOS 是 mp4，其他多为 webm）
+let gotWebSpeechResult = false      // 本轮录音 Web Speech 是否拿到过 final 文本
 
-const { startRecognition, stopRecognition, isSupported, updateSettings } = useSpeechRecognition({
+const { startRecognition, stopRecognition, isSupported, recognitionFailed, updateSettings, preflightRecognition } = useSpeechRecognition({
   onResult: (text) => {
     // 实时显示识别的中间结果
     chatInput.value = text
   },
   language: appSettings.value.voiceLanguage,
   continuous: appSettings.value.voiceContinuous,
+  onError: (errorType) => {
+    // 这些都是正常产生的事件，不提示
+    if (errorType === 'no-speech' || errorType === 'aborted') return
+    if (errorType === 'network') {
+      showNotification('浏览器语音识别不可用，已自动切换到服务器识别', 'warning')
+    } else if (errorType === 'not-allowed' || errorType === 'service-not-allowed') {
+      showNotification('请允许访问麦克风后重试', 'error')
+    } else {
+      showNotification('语音识别错误: ' + errorType, 'warning')
+    }
+  },
   onFinalResult: async (text) => {
+    gotWebSpeechResult = true
     // 在非连续模式下，识别完成后自动停止录音
     if (!appSettings.value.voiceContinuous && isRecordingVoice.value && mediaRecorder) {
       console.log('识别完成，自动停止录音（非连续模式）')
@@ -857,6 +922,22 @@ const { startRecognition, stopRecognition, isSupported, updateSettings } = useSp
   }
 })
 
+const runSpeechRecognitionPreflight = async (aggressive = false) => {
+  try {
+    const result = await preflightRecognition({ aggressive })
+    console.log('🎙️ Web Speech 预检结果:', result)
+    if (result.ok === false) {
+      showNotification(t('notifications.voiceFallbackFunASR'), 'warning')
+    } else if (result.ok === true) {
+      console.log('✅ Web Speech API 可用')
+    }
+    return result
+  } catch (error) {
+    console.warn('Web Speech 预检异常:', error)
+    return { ok: null, reason: 'preflight-error' }
+  }
+}
+
 const startVoiceRecording = async () => {
   if (isRecordingVoice.value) return
   
@@ -870,7 +951,27 @@ const startVoiceRecording = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     
     audioChunks = []
-    mediaRecorder = new MediaRecorder(stream)
+    gotWebSpeechResult = false
+    
+    // 选择浏览器能输出的 mime：iOS Safari 不支持 webm，必须 mp4/aac
+    const mimeCandidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4;codecs=mp4a.40.2',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+      ''  // 兜底默认值
+    ]
+    let chosen = ''
+    for (const m of mimeCandidates) {
+      if (m === '' || (window.MediaRecorder && MediaRecorder.isTypeSupported(m))) {
+        chosen = m
+        break
+      }
+    }
+    recordedMimeType = chosen
+    mediaRecorder = chosen ? new MediaRecorder(stream, { mimeType: chosen }) : new MediaRecorder(stream)
+    console.log('MediaRecorder mimeType:', mediaRecorder.mimeType, 'isSupported(WebSpeech):', isSupported, 'recognitionFailed:', recognitionFailed.value)
     
     mediaRecorder.ondataavailable = (e) => {
       if (e.data.size > 0) {
@@ -881,7 +982,8 @@ const startVoiceRecording = async () => {
     mediaRecorder.start()
     isRecordingVoice.value = true
     
-    if (isSupported) {
+    // 只在之前没报过错时才尝试启动 Web Speech
+    if (isSupported && !recognitionFailed.value) {
       startRecognition()
     }
   } catch (error) {
@@ -911,35 +1013,50 @@ const stopVoiceRecording = async () => {
     // 关闭麦克风流
     mediaRecorder.stream.getTracks().forEach(track => track.stop())
     
-    // 如果浏览器支持 Web Speech API，优先使用浏览器识别，不发送到后端
-    // 浏览器识别的结果会通过 onFinalResult 回调处理
-    if (isSupported) {
+    // 策略：
+    //  - 如果 Web Speech 成功拿到过一句（gotWebSpeechResult）、且未报错 → 信任浏览器识别，不重复发后端
+    //  - 其余一切情况（不支持 / 报错 / 什么都没识别到）都发到 /asr 走后端 Whisper
+    const useBackend = !isSupported || recognitionFailed.value || !gotWebSpeechResult
+    if (!useBackend) {
       console.log('使用浏览器语音识别，无需发送到后端')
       audioChunks = []
       return
     }
     
-    // 浏览器不支持时，才发送音频到后端进行 ASR 识别
     if (audioChunks.length > 0) {
-      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' })
+      // 用 MediaRecorder 实际使用的 mime，避免 iOS mp4 被误打为 webm
+      const blobMime = mediaRecorder.mimeType || recordedMimeType || 'audio/webm'
+      const ext = blobMime.includes('mp4') ? 'm4a'
+                : blobMime.includes('ogg') ? 'ogg'
+                : 'webm'
+      const audioBlob = new Blob(audioChunks, { type: blobMime })
+      console.log('上传到后端 ASR，大小:', audioBlob.size, '类型:', blobMime)
       
       try {
         showNotification(t('notifications.voiceRecognizing'), 'info')
         
         const formData = new FormData()
-        formData.append('file', audioBlob, 'voice.webm')
+        formData.append('file', audioBlob, 'voice.' + ext)
         formData.append('sessionid', sessionId.value)
         
-        const response = await fetch('/asr', {
+        let response = await fetch('/asr', {
           method: 'POST',
           body: formData
         })
+
+        if (response.status === 404) {
+          console.warn('/asr 返回 404，重试 /asr/')
+          response = await fetch('/asr/', {
+            method: 'POST',
+            body: formData
+          })
+        }
         
         if (response.ok) {
           const data = await response.json()
           console.log('ASR 识别成功:', data)
           
-          if (data.text) {
+          if (data.code === 0 && data.text) {
             // 显示用户说的话
             addMessage(data.text, 'user')
             showNotification(t('notifications.voiceRecognized'), 'success')
@@ -949,10 +1066,11 @@ const stopVoiceRecording = async () => {
               addMessage(data.response, 'ai')
             }
           } else {
-            showNotification(t('notifications.voiceNoContent'), 'warning')
+            showNotification(data.msg || t('notifications.voiceNoContent'), 'warning')
           }
         } else {
-          console.error('ASR 识别失败:', response.status)
+          const errorText = await response.text().catch(() => '')
+          console.error('ASR 识别失败:', response.status, errorText.slice(0, 300))
           showNotification(t('notifications.voiceFailed'), 'error')
         }
       } catch (error) {
@@ -1058,6 +1176,10 @@ onMounted(async () => {
   
   // 应用初始主题
   updateTheme(appSettings.value.theme)
+
+  // 页面加载时先做一次无打扰预检：如果已授权麦克风，会直接发现 Web Speech 网络不可用；
+  // 如果仍需弹权限框，则等用户点击启动连接后再测。
+  runSpeechRecognitionPreflight(false)
   
   // 开始轮询检查后端是否就绪：一直轮询直到成功，避免 60s 后按钮永远卡在"后端启动中"
   console.log('🔍 开始检查后端状态...')
@@ -1984,6 +2106,32 @@ body {
   animation: pulse 2s infinite;
 }
 
+/* 解除静音按钮 (移动端 autoplay 必须 muted, 用户首次手势后可 unmute) */
+.unmute-btn {
+  position: absolute;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 0.6rem 1.2rem;
+  border-radius: 24px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+  animation: pulse 2s infinite;
+}
+
+.unmute-btn:hover {
+  background: rgba(0, 0, 0, 0.9);
+}
+
 .video-controls {
   padding: 1.5rem;
   border-top: 1px solid var(--border);
@@ -2346,16 +2494,21 @@ body {
   font-size: 16px;
 }
 
-/* 通知：缩到屏边 */
+/* 通知：手机端放到屏幕底部，避免遮住视频右上角的"启动连接"按钮 */
 .app-wrapper.mobile .notification-container {
-  top: 60px;
+  top: auto;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
   right: 8px;
   left: 8px;
+  pointer-events: none;        /* 容器空白处不拦截点击 */
 }
 
 .app-wrapper.mobile .notification {
   padding: 10px 12px;
   font-size: 0.85rem;
+  min-width: 0;
+  max-width: 100%;
+  pointer-events: auto;        /* 通知本体仍然可点 */
 }
 
 /* 滚动条样式 */

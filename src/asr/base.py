@@ -102,7 +102,7 @@ class BaseASR(ABC):
             临时文件路径
         """
         try:
-            # 尝试读取音频并转换为 wav
+            # 优先尝试 soundfile（支持 wav/flac/ogg）
             audio_stream = BytesIO(audio_bytes)
             data, samplerate = sf.read(audio_stream)
             
@@ -115,8 +115,54 @@ class BaseASR(ABC):
             return temp_path
             
         except Exception as e:
+            logger.debug(f'[ASR] soundfile 无法解码（{e}），尝试 ffmpeg 转码')
+            
+            # 退路 1：调用 ffmpeg 转 16kHz 单声道 wav，可处理 webm/m4a/mp4/ogg/opus 等
+            # FunASR / kaldiio 都需要标准 wav，所以这里必须真正转码而不是只改扩展名
+            try:
+                import subprocess
+                
+                # 先把原始字节落到带原扩展名的文件，让 ffmpeg 走容器探测
+                src_fd, src_path = tempfile.mkstemp(suffix='.bin')
+                os.close(src_fd)
+                with open(src_path, 'wb') as f:
+                    f.write(audio_bytes)
+                
+                dst_fd, dst_path = tempfile.mkstemp(suffix='.wav')
+                os.close(dst_fd)
+                
+                cmd = [
+                    'ffmpeg', '-y', '-loglevel', 'error',
+                    '-i', src_path,
+                    '-ac', '1',          # 单声道
+                    '-ar', '16000',      # 16kHz（whisper / paraformer 通用）
+                    '-f', 'wav',
+                    dst_path,
+                ]
+                proc = subprocess.run(cmd, capture_output=True, timeout=30)
+                
+                # 清理源文件
+                try:
+                    os.unlink(src_path)
+                except Exception:
+                    pass
+                
+                if proc.returncode == 0 and os.path.getsize(dst_path) > 44:  # > wav header
+                    logger.debug(f'[ASR] ffmpeg 转码成功: {dst_path}')
+                    return dst_path
+                
+                logger.warning(f'[ASR] ffmpeg 转码失败 rc={proc.returncode}: {proc.stderr.decode("utf-8", errors="ignore")[:200]}')
+                try:
+                    os.unlink(dst_path)
+                except Exception:
+                    pass
+            except FileNotFoundError:
+                logger.warning('[ASR] ffmpeg 未安装，跳过转码')
+            except Exception as e2:
+                logger.warning(f'[ASR] ffmpeg 调用异常: {e2}')
+            
+            # 退路 2：直接保存原始字节（whisper 内部能 ffmpeg 解码，funasr 多半不行）
             logger.warning(f'[ASR] 音频格式转换失败，保存原始格式: {e}')
-            # 如果转换失败，直接保存原始字节
             temp_fd, temp_path = tempfile.mkstemp(suffix='.webm')
             os.close(temp_fd)
             

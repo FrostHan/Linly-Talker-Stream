@@ -127,6 +127,7 @@ export default {
     voiceNoContent: '未识别到语音内容',
     voiceFailed: '语音识别失败',
     voiceRequestFailed: '语音识别请求失败',
+    voiceFallbackFunASR: '浏览器语音识别不可用，已切换到服务器 FunASR',
     voiceMessageFailed: '语音消息发送失败，请重试',
     connectFirst: '请先启动连接',
     backendNotReady: '后端尚未完全启动，请稍候...'

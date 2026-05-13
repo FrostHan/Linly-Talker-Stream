@@ -13,6 +13,7 @@ async def humanaudio(request):
     try:
         form = await request.post()
         sessionid = int(form.get('sessionid', 0))
+        state.touch_session(sessionid)
         fileobj = form["file"]
         filename = fileobj.filename
         filebytes = fileobj.file.read()
@@ -39,6 +40,7 @@ async def asr(request):
     try:
         form = await request.post()
         sessionid = int(form.get('sessionid', 0))
+        state.touch_session(sessionid)
         fileobj = form["file"]
         filebytes = fileobj.file.read()
 
@@ -51,6 +53,7 @@ async def asr(request):
             asr_engine = get_asr_engine(
                 asr_type=asr_config.type if asr_config else "whisper",
                 model_size=asr_config.model_size if asr_config else "base",
+                config=asr_config,
                 device=asr_config.device if asr_config else "auto",
             )
             

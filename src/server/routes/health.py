@@ -15,4 +15,9 @@ async def health_check(request):
                 "ready": state.server_ready
             }
         ),
+        headers={
+            # 不能让浏览器/CDN 缓存早期的 ready:false 响应
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
     )

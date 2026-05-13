@@ -12,6 +12,7 @@ async def set_audiotype(request):
     try:
         params = await request.json()
         sessionid = params.get('sessionid', 0)
+        state.touch_session(sessionid)
         state.avatar_streams[sessionid].set_custom_state(params['audiotype'], params['reinit'])
 
         return web.Response(
@@ -38,6 +39,7 @@ async def record(request):
 
         sessionid = params.get('sessionid', 0)
         logger.info(f'[录制API] sessionid={sessionid}')
+        state.touch_session(sessionid)
         
         if sessionid not in state.avatar_streams:
             logger.error(f'[录制API] 录制失败: sessionid {sessionid} 不存在')
