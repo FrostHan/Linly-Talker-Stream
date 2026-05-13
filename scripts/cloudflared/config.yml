@@ -1,0 +1,24 @@
+# 拷贝到 C:\Users\hdqhd\.cloudflared\config.yml
+# 然后运行：
+#   cloudflared tunnel route dns talker talker.frostnova.uk
+#   cloudflared tunnel run talker
+#
+# 备注：
+# - origin 指向 vite 开发服务器（自签名证书 → noTLSVerify: true）
+# - 想让 cloudflared 直接打到 aiohttp 后端而不经过 vite，把 service 改成
+#   https://localhost:8010 即可（前端要先 npm run build 并由后端 add_static 托管）
+
+tunnel: c71af1a4-234a-4e5c-96cc-147479e32be0
+credentials-file: C:\Users\hdqhd\.cloudflared\c71af1a4-234a-4e5c-96cc-147479e32be0.json
+
+# 多个域名 / 路径可继续在 ingress 列表里追加，最后一行必须是 catch-all 404
+ingress:
+  - hostname: talker.frostnova.uk
+    service: https://127.0.0.1:3000          # 强制 IPv4，避免 cloudflared 在 Windows 上解析到 [::1]
+    originRequest:
+      noTLSVerify: true            # vite 是自签证书，必须跳过验证
+      connectTimeout: 30s
+      keepAliveTimeout: 90s
+      noHappyEyeballs: true
+      # WebRTC 信令是普通 HTTP/JSON，不需要 disableChunkedEncoding
+  - service: http_status:404

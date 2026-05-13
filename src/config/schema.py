@@ -153,6 +153,11 @@ class TTSConfig:
     ref_text: Optional[str] = None
     tts_server: str = "http://127.0.0.1:9880"
 
+    # 语音参数（目前仅 EdgeTTS 生效：字符串格式 "+10%" / "-20%" / "+50Hz"）
+    rate: str = "+0%"      # 语速，例如 "+20%" 加快 20%，"-10%" 减慢 10%
+    volume: str = "+0%"    # 音量
+    pitch: str = "+0Hz"    # 音调
+
 
 @dataclass
 class ASRConfig:

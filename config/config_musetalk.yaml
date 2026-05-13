@@ -13,15 +13,26 @@ app:
     host: 0.0.0.0  # 0.0.0.0 允许外部访问，localhost 仅本地
 
 model:
-  type: musetalk  # 开发环境使用更快的 wav2lip 模型
-  avatar_id: musetalk_avatar1
-  batch_size: 16  
+  type: musetalk
+  # avatar_id: musetalk_avatar1   # 自定义素材（C:/code/ModelH/assets/avatar/base.mp4，209 帧）
+  avatar_id: musetalk_sun         # 官方素材：孙燕姿（MuseTalk/data/video/sun.mp4，550 帧）
+  batch_size: 8
+  model_path: ./models
 
 
 tts:
   type: edgetts  # 开发环境使用免费的 EdgeTTS
-  ref_file: zh-CN-YunxiaNeural
-  
+  ref_file: zh-TW-HsiaoChenNeural  # EdgeTTS 支持的语音示例，作为参考音色
+  # 仅 EdgeTTS 生效；格式 "+N%" / "-N%"，pitch 用 "+NHz"
+  rate: "+20%"      # 语速：+20% 加快 20%，-10% 减慢 10%
+  volume: "+0%"    # 音量
+  pitch: "+5Hz"    # 音调
+
+  # type: gpt-sovits
+  # tts_server: http://127.0.0.1:9880
+  # ref_file: C:/code/ModelH/assets/voice/ref.wav
+  # ref_text: "博士，我不会让你受伤。拉住我，别走远，好吗？"
+
 asr:
   mode: browser  # browser | server | auto
   type: whisper  # whisper | funasr
@@ -30,9 +41,9 @@ asr:
   device: auto  # auto | cpu | cuda
 
 llm:
-  api_key: ${DASHSCOPE_API_KEY}
-  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-  model: qwen-plus
+  api_key: ${DEEPSEEK_API_KEY}
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat
 
 audio:
   fps: 50

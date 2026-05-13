@@ -3,6 +3,7 @@
 
 """WebRTC 相关路由"""
 import json
+import os
 from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceServer, RTCConfiguration
 from aiortc.rtcrtpsender import RTCRtpSender
@@ -13,6 +14,61 @@ from src.avatars.factory import create_avatar
 from src.utils.logging import logger
 from src.server.state import state
 from src.server.utils import randN
+
+
+_DEFAULT_STUN = 'stun:stun.cloudflare.com:3478'
+
+
+def _load_ice_servers_dicts():
+    """
+    返回 iceServers 列表（dict 格式，可直接 JSON 发给前端）。
+    优先级：
+      1. 环境变量 ICE_SERVERS_JSON —— 完整 JSON。
+         例：'[{"urls":["turn:t.example.com:3478"],"username":"u","credential":"c"}]'
+      2. 环境变量 TURN_URL [+ TURN_USERNAME + TURN_CREDENTIAL]。
+         TURN_URL 可以是逗号分隔多个 URL。
+      3. 都没设，退回 STUN-only（仅本机局域网能走通）。
+    """
+    raw = os.environ.get('ICE_SERVERS_JSON', '').strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list) and data:
+                return data
+        except Exception as e:
+            logger.warning('ICE_SERVERS_JSON 解析失败，忽略：%s', e)
+
+    turn_url = os.environ.get('TURN_URL', '').strip()
+    if turn_url:
+        urls = [u.strip() for u in turn_url.split(',') if u.strip()]
+        entry = {'urls': urls}
+        if os.environ.get('TURN_USERNAME'):
+            entry['username'] = os.environ['TURN_USERNAME']
+        if os.environ.get('TURN_CREDENTIAL'):
+            entry['credential'] = os.environ['TURN_CREDENTIAL']
+        return [{'urls': [_DEFAULT_STUN]}, entry]
+
+    return [{'urls': [_DEFAULT_STUN]}]
+
+
+def _to_aiortc_servers(dicts):
+    """dict 转 aiortc 的 RTCIceServer 对象列表。"""
+    out = []
+    for d in dicts:
+        urls = d.get('urls')
+        if not urls:
+            continue
+        out.append(RTCIceServer(
+            urls=urls,
+            username=d.get('username'),
+            credential=d.get('credential'),
+        ))
+    return out
+
+
+async def get_ice_config(request):
+    """前端 GET /ice：拿到服务器上设定的 ICE 服务器配置。"""
+    return web.json_response({'iceServers': _load_ice_servers_dicts()})
 
 
 async def offer(request):
@@ -30,8 +86,8 @@ async def offer(request):
     )
     state.add_session(sessionid, avatar_stream)
     
-    ice_server = RTCIceServer(urls='stun:stun.miwifi.com:3478')
-    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[ice_server]))
+    ice_servers = _to_aiortc_servers(_load_ice_servers_dicts())
+    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice_servers))
     state.add_peer_connection(pc)
 
     @pc.on("connectionstatechange")

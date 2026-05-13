@@ -1,9 +1,14 @@
 <template>
   <div class="settings-wrapper">
-    <!-- 设置按钮 -->
-    <button class="settings-trigger" @click="toggleSettings" :class="{ active: showSettings }">
+    <!-- 设置按钮（齿轮图标，hover 时旋转） -->
+    <button
+      class="settings-trigger"
+      @click="toggleSettings"
+      :class="{ active: showSettings }"
+      :title="t('settings.title')"
+      :aria-label="t('settings.title')"
+    >
       <i class="bi bi-gear-fill"></i>
-      <span>{{ t('settings.title') }}</span>
     </button>
 
     <!-- 设置面板 -->
@@ -340,32 +345,46 @@ watch(settings, () => {
 }
 
 .settings-trigger {
-  display: flex;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.5rem;
+  justify-content: center;
+  padding: 0;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
-  color: var(--text-primary);
-  border-radius: 8px;
+  color: var(--text-secondary);
+  border-radius: 50%;
   cursor: pointer;
-  transition: all 0.2s;
-  font-weight: 600;
+  transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.2s, box-shadow 0.2s;
 }
 
 .settings-trigger:hover {
   background: var(--primary);
   border-color: var(--primary);
-  transform: translateY(-2px);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -2px rgba(99, 102, 241, 0.45);
+}
+
+.settings-trigger:hover i {
+  transform: rotate(90deg);
 }
 
 .settings-trigger.active {
   background: var(--primary);
   border-color: var(--primary);
+  color: #fff;
+}
+
+.settings-trigger.active i {
+  transform: rotate(180deg);
 }
 
 .settings-trigger i {
   font-size: 1.125rem;
+  line-height: 1;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .settings-overlay {

@@ -3,12 +3,59 @@
 
 """服务器启动和配置"""
 import asyncio
+import os
 from aiohttp import web
 import aiohttp_cors
 
 from src.utils.logging import logger
 from src.server.state import state
 from src.server import routes
+
+
+# 需要鉴权的路由前缀：进入直播间 + 所有会耗 LLM/TTS 资源的接口
+# 不在列表里的（/health /ice /auth_required /download /静态资源）不要求密码
+_PROTECTED_PATHS = (
+    '/offer',           # 建立 WebRTC 会话
+    '/human',           # LLM 对话
+    '/humanaudio',      # 上传音频说话
+    '/asr',             # 服务器端 ASR
+    '/set_audiotype',
+    '/record',
+    '/interrupt_talk',
+    '/is_speaking',
+    '/clear_history',
+    '/download',        # 录像下载也要密码（防止枚举 timestamp 拖走他人录像）
+)
+
+
+@web.middleware
+async def password_middleware(request, handler):
+    """环境变量 ROOM_PASSWORD 设了就启用，未设则不拦截（局域网开发友好）"""
+    expected = os.environ.get('ROOM_PASSWORD', '').strip()
+    if not expected:
+        return await handler(request)
+
+    # CORS 预检请求 (OPTIONS) 不能带自定义 header，必须放行让 aiohttp_cors 处理
+    if request.method == 'OPTIONS':
+        return await handler(request)
+
+    if not any(request.path == p or request.path.startswith(p + '/') for p in _PROTECTED_PATHS):
+        return await handler(request)
+
+    # 优先用 header；body 中的 password 字段作为备选（不读 body 以免耗掉流）
+    provided = request.headers.get('X-Room-Password', '').strip()
+    if provided != expected:
+        logger.warning('鉴权失败 path=%s remote=%s', request.path, request.remote)
+        return web.json_response({'error': 'unauthorized'}, status=401)
+
+    return await handler(request)
+
+
+async def auth_required(request):
+    """前端 查询本服务器是否需要密码"""
+    return web.json_response({
+        'required': bool(os.environ.get('ROOM_PASSWORD', '').strip())
+    })
 
 
 async def on_shutdown(app):
@@ -21,7 +68,10 @@ async def on_shutdown(app):
 def create_app():
     """创建并配置 aiohttp 应用"""
     # 单独设置较大的请求体上限，方便上传音视频
-    app = web.Application(client_max_size=1024**2*100)
+    app = web.Application(
+        client_max_size=1024**2*100,
+        middlewares=[password_middleware],
+    )
     app.on_shutdown.append(on_shutdown)
     
     # 路由集中注册，避免分散难维护
@@ -35,18 +85,29 @@ def create_app():
     app.router.add_post("/is_speaking", routes.is_speaking)
     app.router.add_post("/clear_history", routes.clear_history)
     app.router.add_get("/health", routes.health_check)
+    app.router.add_get("/ice", routes.get_ice_config)
+    app.router.add_get("/auth_required", auth_required)
     app.router.add_get("/download/{filename}", routes.download_record)
     # 前端静态资源托管
     app.router.add_static('/', path='web')
     
-    # 宽松 CORS 方便本地调试和跨域访问
-    cors = aiohttp_cors.setup(app, defaults={
-        "*": aiohttp_cors.ResourceOptions(
+    # CORS：默认只放行公网域名 + 本地开发地址；可用 ALLOWED_ORIGINS 环境变量覆盖（逗号分隔）
+    default_origins = [
+        'https://talker.frostnova.uk',
+        'https://localhost:3000',
+        'https://127.0.0.1:3000',
+    ]
+    extra = os.environ.get('ALLOWED_ORIGINS', '').strip()
+    origins = [o.strip() for o in extra.split(',') if o.strip()] if extra else default_origins
+    cors_defaults = {
+        origin: aiohttp_cors.ResourceOptions(
             allow_credentials=True,
             expose_headers="*",
             allow_headers="*",
         )
-    })
+        for origin in origins
+    }
+    cors = aiohttp_cors.setup(app, defaults=cors_defaults)
     
     for route in list(app.router.routes()):
         cors.add(route)

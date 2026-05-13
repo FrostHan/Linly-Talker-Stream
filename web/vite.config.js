@@ -116,6 +116,16 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
         secure: false
+      },
+      '/ice': {
+        target: backendTarget,
+        changeOrigin: true,
+        secure: false
+      },
+      '/auth_required': {
+        target: backendTarget,
+        changeOrigin: true,
+        secure: false
       }
     }
   },

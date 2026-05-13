@@ -1,6 +1,6 @@
 <!-- Linly-Talker-Stream (https://github.com/Kedreamix/Linly-Talker-Stream). Copyright [Linly-talker-stream@kedreamix]. Apache-2.0. -->
 <template>
-  <div class="app-wrapper">
+  <div class="app-wrapper" :class="{ mobile: isMobile }">
     <!-- 顶部导航栏 -->
     <header class="app-header">
       <div class="header-content">
@@ -10,7 +10,7 @@
           </div>
           <div class="logo-text">
             <h1>{{ t('header.title') }}</h1>
-            <p>{{ t('header.subtitle') }}</p>
+            <p v-if="!isMobile">{{ t('header.subtitle') }}</p>
           </div>
         </div>
         
@@ -19,19 +19,10 @@
             <span class="status-dot"></span>
             <span class="status-text">{{ statusText }}</span>
           </div>
-          <div class="session-info" v-if="sessionId > 0">
+          <div class="session-info" v-if="sessionId > 0 && !isMobile">
             <i class="bi bi-hash"></i>
             <span>{{ t('header.session') }} {{ sessionId }}</span>
           </div>
-          <a 
-            href="https://github.com/Kedreamix/Linly-Talker-Stream" 
-            target="_blank" 
-            class="github-link"
-            :title="t('header.github')"
-          >
-            <i class="bi bi-github"></i>
-            <span>{{ t('header.github') }}</span>
-          </a>
           <SettingsPanel 
             @settings-changed="onSettingsChanged" 
             @notification="showNotification"
@@ -219,7 +210,7 @@
             </div>
 
             <div class="video-wrapper">
-              <video id="video" autoplay playsinline></video>
+              <video id="video" autoplay playsinline webkit-playsinline></video>
               <div class="video-overlay" v-if="!isConnected">
                 <i class="bi bi-camera-video-off" v-if="backendReady"></i>
                 <i class="bi bi-hourglass-split spin" v-else style="font-size: 4rem;"></i>
@@ -300,6 +291,7 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import { useWebRTC } from './composables/useWebRTC'
 import { useSpeechRecognition } from './composables/useSpeechRecognition'
 import { useI18n } from './composables/useI18n'
+import { setupRoomAuth } from './composables/useRoomAuth'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 
@@ -345,6 +337,27 @@ const notifications = ref([])
 let notificationIdCounter = 0
 const lastRecordFile = ref(null)  // 最后一次录制的文件信息
 const backendReady = ref(false)  // 后端是否就绪
+
+// 移动端自动检测：UA + 屏宽双重判断；窗口尺寸变化时实时更新
+// 关键：用立即执行函数初始化 ref，确保首次渲染就拿到正确的 isMobile
+//       否则 onMounted 之前会先按 desktop 渲染，再切到 mobile（且某些场景永远不会切）
+const _initialMobile = (() => {
+  if (typeof window === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  const uaMobile = /iPhone|iPod|Android.*Mobile|BlackBerry|IEMobile|Opera Mini|Mobile Safari/i.test(ua)
+  const narrow = window.matchMedia('(max-width: 768px)').matches
+  const iPadLike = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+  return uaMobile || iPadLike || narrow
+})()
+const isMobile = ref(_initialMobile)
+const detectMobile = () => {
+  const ua = navigator.userAgent || ''
+  const uaMobile = /iPhone|iPod|Android.*Mobile|BlackBerry|IEMobile|Opera Mini|Mobile Safari/i.test(ua)
+  const narrow = window.matchMedia('(max-width: 768px)').matches
+  // iPad 在 iPadOS 13+ UA 里伪装成桌面 Mac，但有触控点
+  const iPadLike = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+  isMobile.value = uaMobile || iPadLike || narrow
+}
 
 // 应用设置
 const appSettings = ref({
@@ -1025,6 +1038,16 @@ onMounted(async () => {
   console.log('✅ Vue 应用已挂载')
   console.log('后端 API 地址: /offer (通过 Vite proxy 转发到 localhost:8010)')
   
+  // 移动端检测
+  detectMobile()
+  window.addEventListener('resize', detectMobile)
+  if (isMobile.value) {
+    console.log('📱 检测到移动端浏览器，已启用移动端布局')
+  }
+
+  // 直播间口令保护：如果后端启用了 ROOM_PASSWORD，会弹窗让用户输入并自动加 header
+  await setupRoomAuth({ onNotification: showNotification })
+
   // 加载语言设置
   loadLocale()
   
@@ -1036,23 +1059,20 @@ onMounted(async () => {
   // 应用初始主题
   updateTheme(appSettings.value.theme)
   
-  // 开始轮询检查后端是否就绪
+  // 开始轮询检查后端是否就绪：一直轮询直到成功，避免 60s 后按钮永远卡在"后端启动中"
   console.log('🔍 开始检查后端状态...')
+  let checkCount = 0
   const checkInterval = setInterval(async () => {
+    checkCount++
     const ready = await checkBackendReady()
     if (ready) {
       clearInterval(checkInterval)
       showNotification(t('notifications.backendReady'), 'success')
+    } else if (checkCount === 30) {
+      // 60s 还没好就提示一下，但继续轮询（不要彻底放弃）
+      showNotification(t('notifications.backendTimeout'), 'warning')
     }
-  }, 2000)  // 每2秒检查一次
-  
-  // 最多检查60秒
-  setTimeout(() => {
-    if (!backendReady.value) {
-      clearInterval(checkInterval)
-      showNotification(t('notifications.backendTimeout'), 'error')
-    }
-  }, 60000)
+  }, 2000)
 })
 </script>
 
@@ -2086,6 +2106,256 @@ body {
   .send-btn i {
     font-size: 1.25rem;
   }
+}
+
+/* ============================================================
+   移动端专用布局：通过 JS 检测 UA / 屏宽，给根节点加 .mobile class
+   覆盖更激进，确保在 320~480px 窄屏也能用
+   ============================================================ */
+.app-wrapper.mobile {
+  font-size: 14px;
+}
+
+.app-wrapper.mobile .app-header {
+  padding: 0.5rem 0.75rem;
+}
+
+.app-wrapper.mobile .header-content {
+  gap: 0.5rem;
+}
+
+.app-wrapper.mobile .logo-icon {
+  width: 36px;
+  height: 36px;
+  font-size: 1.1rem;
+}
+
+.app-wrapper.mobile .logo-text h1 {
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.app-wrapper.mobile .status-section {
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.app-wrapper.mobile .status-badge {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.app-wrapper.mobile .status-text {
+  display: none;       /* 只保留小绿/红点，省空间 */
+}
+
+.app-wrapper.mobile .main-content {
+  padding: 0.5rem;
+}
+
+.app-wrapper.mobile .content-wrapper {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr;        /* 视频在上、聊天在下 */
+  gap: 0.5rem;
+  height: calc(100vh - 60px);          /* 减去精简后的 header */
+  height: calc(100dvh - 60px);          /* iOS 动态视口，避开地址栏 */
+}
+
+/* 视频区：移到顶部，按 1:1 比例占屏宽 */
+.app-wrapper.mobile .video-section {
+  order: -1;
+  border-radius: 12px;
+}
+
+.app-wrapper.mobile .video-card {
+  height: auto;
+}
+
+/* 移动端：完全隐藏视频面板的"数字人视频"标题栏，省出空间 */
+/* 连接 / 断开连接按钮浮动到视频右上角 */
+.app-wrapper.mobile .video-header {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 5;
+  padding: 0;
+  background: transparent;
+  border: none;
+  width: auto;
+}
+
+.app-wrapper.mobile .video-header h2 {
+  display: none;
+}
+
+.app-wrapper.mobile .video-section {
+  position: relative;     /* 让 video-header 的 absolute 以此为基准 */
+}
+
+.app-wrapper.mobile .video-wrapper {
+  width: 100%;
+  aspect-ratio: 1 / 1;                 /* 数字人视频 450x450，按方形显示 */
+  max-height: 32vh;                    /* 比之前的 45vh 矮一截，给聊天区更多空间 */
+  flex: none;
+}
+
+/* 手机端：隐藏录制控件整行（开始 / 停止 / 下载录制） */
+.app-wrapper.mobile .video-controls {
+  display: none;
+}
+
+.app-wrapper.mobile .control-buttons {
+  gap: 0.3rem;
+}
+
+.app-wrapper.mobile .control-btn {
+  flex: 1;
+  padding: 0.35rem 0.25rem;            /* 更矮 */
+  font-size: 0.75rem;
+  min-width: 0;
+  line-height: 1.1;
+}
+
+.app-wrapper.mobile .control-btn .bi {
+  font-size: 0.85rem;
+}
+
+.app-wrapper.mobile .control-btn span,
+.app-wrapper.mobile .connect-btn,
+.app-wrapper.mobile .disconnect-btn {
+  font-size: 0.8rem;
+}
+
+.app-wrapper.mobile .connect-btn,
+.app-wrapper.mobile .disconnect-btn {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* 聊天区 */
+.app-wrapper.mobile .chat-section {
+  border-radius: 12px;
+  min-height: 0;
+}
+
+.app-wrapper.mobile .chat-header {
+  padding: 0.6rem 0.75rem;
+  flex-direction: row;                 /* 单行仅显示标题 */
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.app-wrapper.mobile .chat-header h2 {
+  font-size: 0.95rem;
+}
+
+/* 手机端：隐藏「对话 / 朗读 / 清空」按钮组，默认只用对话模式 */
+.app-wrapper.mobile .chat-actions {
+  display: none;
+}
+
+.app-wrapper.mobile .action-btn {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+
+.app-wrapper.mobile .action-btn .bi {
+  font-size: 0.95rem;
+}
+
+/* 隐藏“清空历史”文字、只保留图标 */
+.app-wrapper.mobile .clear-history-btn {
+  font-size: 0;
+}
+.app-wrapper.mobile .clear-history-btn .bi {
+  font-size: 1rem;
+}
+
+.app-wrapper.mobile .messages-container {
+  padding: 0.5rem;
+  gap: 0.5rem;
+}
+
+.app-wrapper.mobile .message {
+  gap: 0.4rem;
+}
+
+.app-wrapper.mobile .message-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.app-wrapper.mobile .message-content {
+  max-width: calc(100% - 36px);
+}
+
+.app-wrapper.mobile .message-text {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.app-wrapper.mobile .message-text :deep(pre) {
+  font-size: 0.75rem;
+  padding: 0.5rem;
+  overflow-x: auto;
+}
+
+/* 输入区 */
+.app-wrapper.mobile .input-area {
+  padding: 0.5rem;
+}
+
+.app-wrapper.mobile .input-box {
+  gap: 0.4rem;
+}
+
+.app-wrapper.mobile textarea {
+  font-size: 16px;     /* iOS 小于 16px 会自动放大触发缩放 */
+  padding: 0.6rem 0.75rem;
+}
+
+.app-wrapper.mobile .input-actions {
+  flex-direction: row;
+  gap: 0.4rem;
+}
+
+.app-wrapper.mobile .voice-btn,
+.app-wrapper.mobile .send-btn {
+  flex: 1;
+  padding: 0.6rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.app-wrapper.mobile .send-btn span {
+  display: none;       /* 只剩纸飞机图标 */
+}
+
+/* TTS 模式 */
+.app-wrapper.mobile .tts-mode {
+  padding: 0.75rem;
+}
+
+.app-wrapper.mobile .tts-container textarea {
+  padding: 0.75rem;
+  font-size: 16px;
+}
+
+/* 通知：缩到屏边 */
+.app-wrapper.mobile .notification-container {
+  top: 60px;
+  right: 8px;
+  left: 8px;
+}
+
+.app-wrapper.mobile .notification {
+  padding: 10px 12px;
+  font-size: 0.85rem;
 }
 
 /* 滚动条样式 */

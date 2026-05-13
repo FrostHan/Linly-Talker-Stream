@@ -77,7 +77,14 @@ class EdgeTTS(BaseTTS):
 
     async def __main(self, voicename: str, text: str):
         try:
-            communicate = edge_tts.Communicate(text, voicename)
+            tts_cfg = self.config.tts
+            communicate = edge_tts.Communicate(
+                text,
+                voicename,
+                rate=getattr(tts_cfg, "rate", "+0%"),
+                volume=getattr(tts_cfg, "volume", "+0%"),
+                pitch=getattr(tts_cfg, "pitch", "+0Hz"),
+            )
 
             first = True
             async for chunk in communicate.stream():

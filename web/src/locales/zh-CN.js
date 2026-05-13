@@ -1,8 +1,8 @@
 // 中文语言包
 export default {
   header: {
-    title: 'Linly-Talker-Stream',
-    subtitle: '全双工实时交互数字人',
+    title: '虚拟聊天系统',
+    subtitle: 'AI实时交互数字人',
     status: {
       connected: '已连接',
       connecting: '连接中...',
@@ -26,9 +26,9 @@ export default {
     ttsInputPlaceholder: '在这里输入想让数字人朗读的文字内容...',
     ttsButton: '开始朗读',
     ttsTitle: '输入朗读文本',
-    welcomeMessage: '你好！我是 Linly 数字人，很高兴见到你。点击右侧"启动连接"开始我们的对话吧！',
+    welcomeMessage: '你好！很高兴见到你。点击右侧"启动连接"开始我们的对话吧！',
     you: '你',
-    ai: 'Linly'
+    ai: '主播'
   },
   
   video: {

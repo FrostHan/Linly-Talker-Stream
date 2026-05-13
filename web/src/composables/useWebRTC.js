@@ -6,8 +6,7 @@ export function useWebRTC(options = {}) {
   
   const startPlay = async (stunServer = 'stun:stun.miwifi.com:3478') => {
     console.log('开始连接 WebRTC...')
-    console.log('使用 STUN 服务器:', stunServer || '不使用 STUN')
-    
+
     // 关闭之前的连接
     if (pc) {
       console.log('关闭旧连接...')
@@ -18,14 +17,26 @@ export function useWebRTC(options = {}) {
     try {
       console.log('✅ 创建 RTCPeerConnection...')
       
-      // 创建 RTCPeerConnection 配置
-      const configuration = {
-        iceServers: []
+      // 创建 RTCPeerConnection 配置：优先用后端 /ice 下发的配置（含 TURN 凭据），
+      // 失败时回退到设置面板里的 STUN
+      const configuration = { iceServers: [] }
+      let usedRemoteIce = false
+      try {
+        const r = await fetch('/ice')
+        if (r.ok) {
+          const j = await r.json()
+          if (Array.isArray(j.iceServers) && j.iceServers.length > 0) {
+            configuration.iceServers = j.iceServers
+            usedRemoteIce = true
+            console.log('🌐 使用后端 /ice 下发的 ICE 配置:', j.iceServers.map(s => s.urls))
+          }
+        }
+      } catch (e) {
+        console.warn('获取 /ice 失败，使用本地 STUN:', e)
       }
-      
-      // 如果提供了 STUN 服务器，则添加
-      if (stunServer) {
+      if (!usedRemoteIce && stunServer) {
         configuration.iceServers.push({ urls: stunServer })
+        console.log('🧊 使用本地 STUN 服务器:', stunServer)
       }
       
       pc = new RTCPeerConnection(configuration)
