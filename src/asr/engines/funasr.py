@@ -4,6 +4,7 @@ FunASR 引擎实现
 """
 
 import re
+import time
 from typing import Dict, Any
 
 from src.utils.logging import logger
@@ -56,14 +57,39 @@ class FunASR(BaseASR):
         if kwargs:
             logger.info(f'[FunASR] 忽略未使用参数: {list(kwargs.keys())}')
         logger.info(f'[FunASR] 模型: {model_name}, 设备配置: {device}')
+
+    def _resolve_device(self) -> str:
+        if self.device and self.device != "auto":
+            return "cuda:0" if self.device == "cuda" else self.device
+        try:
+            import torch
+            return "cuda:0" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            return "cpu"
     
     def _load_model(self):
         """加载 FunASR 模型"""
         try:
             from funasr import AutoModel
-            logger.info(f'[FunASR] 正在加载模型: {self.model_name}')
-            self.model = AutoModel(model=self.model_name)
-            logger.info('[FunASR] 模型加载成功')
+            resolved_device = self._resolve_device()
+            logger.info(f'[FunASR] 正在加载模型: {self.model_name}, device={resolved_device}')
+            start_time = time.perf_counter()
+            load_kwargs = {
+                "model": self.model_name,
+                "device": resolved_device,
+                "disable_update": True,
+            }
+            try:
+                self.model = AutoModel(**load_kwargs)
+            except TypeError as e:
+                logger.warning(f'[FunASR] 当前版本不支持部分加载参数，降级重试: {e}')
+                load_kwargs.pop("disable_update", None)
+                try:
+                    self.model = AutoModel(**load_kwargs)
+                except TypeError:
+                    load_kwargs.pop("device", None)
+                    self.model = AutoModel(**load_kwargs)
+            logger.info(f'[FunASR] 模型加载成功，耗时 {time.perf_counter() - start_time:.3f}s')
             
         except ImportError:
             raise ImportError(
@@ -84,7 +110,9 @@ class FunASR(BaseASR):
         Returns:
             识别结果字典
         """
+        start_time = time.perf_counter()
         result = self.model.generate(input=audio_path)
+        logger.info(f'[FunASR] generate 耗时: {time.perf_counter() - start_time:.3f}s')
         
         if result and len(result) > 0:
             text = result[0].get("text", "")

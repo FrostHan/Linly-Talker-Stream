@@ -108,9 +108,42 @@ async def idle_cleanup_task(app):
         raise
 
 
+def _asr_preload_enabled() -> bool:
+    return os.environ.get('ASR_PRELOAD', '1').strip().lower() not in ('0', 'false', 'no')
+
+
+def _preload_asr_sync():
+    """后台预热 ASR，避免第一次 /asr 请求承担模型冷启动。"""
+    if not _asr_preload_enabled():
+        logger.info('[ASR] 后台预热已关闭 (ASR_PRELOAD=0)')
+        return
+    if state.config is None or not getattr(state.config, 'asr', None):
+        return
+
+    asr_config = state.config.asr
+    try:
+        from src.asr.factory import preload_asr_engine
+        logger.info('[ASR] 后台预热开始: type=%s device=%s', asr_config.type, asr_config.device)
+        preload_asr_engine(
+            asr_type=asr_config.type,
+            model_size=asr_config.model_size,
+            config=asr_config,
+            device=asr_config.device,
+        )
+        logger.info('[ASR] 后台预热完成')
+    except Exception:
+        logger.exception('[ASR] 后台预热失败')
+
+
+async def asr_preload_task(app):
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _preload_asr_sync)
+
+
 async def on_startup(app):
     """启动后台 idle cleanup 任务"""
     app['idle_cleanup_task'] = asyncio.create_task(idle_cleanup_task(app))
+    app['asr_preload_task'] = asyncio.create_task(asr_preload_task(app))
 
 
 async def on_shutdown(app):
@@ -120,6 +153,13 @@ async def on_shutdown(app):
         task.cancel()
         try:
             await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    asr_task = app.get('asr_preload_task')
+    if asr_task is not None and not asr_task.done():
+        asr_task.cancel()
+        try:
+            await asr_task
         except (asyncio.CancelledError, Exception):
             pass
     coros = [pc.close() for pc in state.pcs]

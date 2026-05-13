@@ -8,7 +8,9 @@ from __future__ import annotations
 import os
 import tempfile
 import soundfile as sf
+import time
 from io import BytesIO
+from threading import Lock
 from typing import Dict, Any
 from abc import ABC, abstractmethod
 
@@ -35,8 +37,21 @@ class BaseASR(ABC):
         self.config = config
         self.language = "zh"  # 默认中文
         self._initialized = False
+        self._init_lock = Lock()
         
         logger.info(f'[ASR] 初始化 {self.__class__.__name__}')
+
+    def ensure_initialized(self):
+        """线程安全地加载模型；后台预热和首次请求可能同时触发。"""
+        if self._initialized:
+            return
+        with self._init_lock:
+            if self._initialized:
+                return
+            start_time = time.perf_counter()
+            self._load_model()
+            self._initialized = True
+            logger.info(f'[ASR] 模型初始化耗时: {time.perf_counter() - start_time:.3f}s')
     
     @abstractmethod
     def _load_model(self):
@@ -70,15 +85,17 @@ class BaseASR(ABC):
             Dict 包含识别结果
         """
         # 延迟加载模型，避免启动时耗时/占用显存
-        if not self._initialized:
-            self._load_model()
-            self._initialized = True
+        self.ensure_initialized()
         
         # 统一转成临时文件，方便不同引擎复用文件接口
         temp_audio_path = None
         try:
+            prepare_start = time.perf_counter()
             temp_audio_path = self._save_temp_audio(audio_bytes)
+            logger.info(f'[ASR] 音频准备耗时: {time.perf_counter() - prepare_start:.3f}s')
+            transcribe_start = time.perf_counter()
             result = self._transcribe(temp_audio_path)
+            logger.info(f'[ASR] 引擎识别耗时: {time.perf_counter() - transcribe_start:.3f}s')
             
             logger.info(f'[ASR] 识别结果: {result.get("text", "")}')
             return result

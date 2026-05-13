@@ -2,6 +2,7 @@
 import json
 from aiohttp import web
 import asyncio
+import time
 
 from src.llm.service import llm_response
 from src.utils.logging import logger
@@ -37,12 +38,15 @@ async def humanaudio(request):
 
 async def asr(request):
     """ASR 语音识别接口：将音频转换为文本，然后调用 LLM 进行对话"""
+    request_start = time.perf_counter()
     try:
+        parse_start = time.perf_counter()
         form = await request.post()
         sessionid = int(form.get('sessionid', 0))
         state.touch_session(sessionid)
         fileobj = form["file"]
         filebytes = fileobj.file.read()
+        logger.info(f'[ASR] 请求解析耗时: {time.perf_counter() - parse_start:.3f}s, bytes={len(filebytes)}')
 
         # ASR/LLM 调用在同一流程中，失败时返回可读错误
         from src.asr import get_asr_engine
@@ -62,7 +66,9 @@ async def asr(request):
             
             logger.info(f'[ASR] 开始识别音频，sessionid={sessionid}')
             loop = asyncio.get_event_loop()
+            asr_start = time.perf_counter()
             result = await loop.run_in_executor(None, asr_engine.transcribe, filebytes)
+            logger.info(f'[ASR] transcribe 总耗时: {time.perf_counter() - asr_start:.3f}s')
             text = result.get("text", "").strip()
             
             if not text:
@@ -87,6 +93,7 @@ async def asr(request):
                     status=404
                 )
 
+            llm_start = time.perf_counter()
             llm_text = await loop.run_in_executor(
                 None,
                 llm_response,
@@ -96,9 +103,8 @@ async def asr(request):
                 llm_config.base_url if llm_config else "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 llm_config.model if llm_config else "qwen-plus",
             )
+            logger.info(f'[ASR] LLM 总耗时: {time.perf_counter() - llm_start:.3f}s')
             logger.info(f'[ASR] LLM 回复: {llm_text}')
-            
-            avatar_stream.put_msg_txt(llm_text)
             
             return web.Response(
                 content_type="application/json",
@@ -124,3 +130,5 @@ async def asr(request):
                 {"code": -1, "msg": str(e)}
             ),
         )
+    finally:
+        logger.info(f'[ASR] 请求总耗时: {time.perf_counter() - request_start:.3f}s')

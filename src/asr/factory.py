@@ -5,6 +5,7 @@ ASR 工厂类
 """
 
 from typing import Type, Optional
+from threading import Lock
 
 from src.asr.base import BaseASR
 from src.asr.engines import WhisperASR, FunASR
@@ -42,6 +43,7 @@ def create_asr_engine(
     return engine_cls(config=config)
 
 _asr_instance: Optional[BaseASR] = None
+_asr_lock = Lock()
 
 
 def get_asr_engine(
@@ -55,14 +57,33 @@ def get_asr_engine(
     
     # 单例复用，避免重复加载模型
     if _asr_instance is None or force_new:
-        _asr_instance = create_asr_engine(
-            asr_type=asr_type,
-            config=config,
-            model_size=model_size,
-            **kwargs
-        )
+        with _asr_lock:
+            if _asr_instance is None or force_new:
+                _asr_instance = create_asr_engine(
+                    asr_type=asr_type,
+                    config=config,
+                    model_size=model_size,
+                    **kwargs
+                )
     
     return _asr_instance
+
+
+def preload_asr_engine(
+    asr_type: str = "whisper",
+    model_size: str = "base",
+    config=None,
+    **kwargs
+) -> BaseASR:
+    """提前加载 ASR 模型，避免第一次语音请求承担冷启动。"""
+    engine = get_asr_engine(
+        asr_type=asr_type,
+        model_size=model_size,
+        config=config,
+        **kwargs,
+    )
+    engine.ensure_initialized()
+    return engine
 
 
 def release_asr_engine():
